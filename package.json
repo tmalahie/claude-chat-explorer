@@ -1,0 +1,14 @@
+{
+  "name": "claude-chat-explorer",
+  "version": "1.0.0",
+  "description": "Local read-only explorer for Claude Code conversations (~/.claude/projects)",
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix client run build",
+    "start": "node server/index.js",
+    "setup": "npm install && npm --prefix client install && npm run build"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

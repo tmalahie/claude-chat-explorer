@@ -1,0 +1,154 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-app: #0e1621;
+  --color-side: #17212b;
+  --color-side-hover: #1f2c39;
+  --color-side-active: #2b5278;
+  --color-bubble-in: #182533;
+  --color-bubble-out: #2b5278;
+  --color-ink: #f1f5f9;
+  --color-muted: #708499;
+  --color-accent: #64b5f6;
+  --color-line: #101921;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-app);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Subtle scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3744 transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a3744;
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Flash highlight when jumping to a message from search */
+@keyframes flash-ring {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--color-accent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+.flash {
+  animation: flash-ring 2s ease-out 1;
+}
+
+mark {
+  background: #64b5f6;
+  color: #0e1621;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Markdown styling inside bubbles */
+.md {
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md table,
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 0.5em 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+}
+.md h1 {
+  font-size: 1.25em;
+}
+.md h2 {
+  font-size: 1.15em;
+}
+.md h3 {
+  font-size: 1.05em;
+}
+.md ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.md ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.md code {
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.875em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.md pre {
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 0.7em 0.9em;
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+.md blockquote {
+  border-left: 3px solid var(--color-muted);
+  padding-left: 0.8em;
+  color: var(--color-muted);
+}
+.md table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+}
+.md th,
+.md td {
+  border: 1px solid #2a3744;
+  padding: 0.3em 0.6em;
+}
+.md hr {
+  border-color: #2a3744;
+  margin: 0.8em 0;
+}

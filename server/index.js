@@ -10,9 +10,32 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 9876;
+
+// Sidecar store for user edits (custom titles, notes). We never modify the
+// original Claude transcript files — overrides are overlaid at read time,
+// keyed by conversation id (a globally-unique uuid).
+const DATA_DIR = path.join(__dirname, 'data');
+const OVERRIDES_FILE = path.join(DATA_DIR, 'overrides.json');
+let overrides = {};
+try {
+  overrides = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf8'));
+} catch {
+  overrides = {};
+}
+async function saveOverrides() {
+  await fsp.mkdir(DATA_DIR, { recursive: true });
+  await fsp.writeFile(OVERRIDES_FILE, JSON.stringify(overrides, null, 2));
+}
+function getOverride(convId) {
+  return overrides[convId] || null;
+}
+function effectiveTitle(convId, derived) {
+  return getOverride(convId)?.title || derived || null;
+}
 
 const app = express();
+app.use(express.json({ limit: '256kb' }));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -271,9 +294,10 @@ app.get('/api/projects/:projectId/conversations', async (req, res) => {
     const conversations = await Promise.all(
       files.map(async ({ file, name, stat }) => {
         const [title, tail] = await Promise.all([getTitle(file, stat), getPreview(file, stat)]);
+        const id = name.replace(/\.jsonl$/, '');
         return {
-          id: name.replace(/\.jsonl$/, ''),
-          title: title || null,
+          id,
+          title: effectiveTitle(id, title),
           preview: tail.preview || null,
           lastActivity: tail.ts || new Date(stat.mtimeMs).toISOString(),
         };
@@ -299,12 +323,24 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
     const messages = [];
     let title = null;
     let fallbackTitle = null;
+    let firstTimestamp = null;
+    let lastTimestamp = null;
+    let gitBranch = null;
+    let version = null;
+    let cwd = null;
 
     const stream = fs.createReadStream(file, { encoding: 'utf8' });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
     for await (const line of rl) {
       const entry = parseLine(line);
       if (!entry) continue;
+      if (entry.timestamp) {
+        if (!firstTimestamp) firstTimestamp = entry.timestamp;
+        lastTimestamp = entry.timestamp;
+      }
+      if (entry.gitBranch) gitBranch = entry.gitBranch;
+      if (entry.version) version = entry.version;
+      if (entry.cwd) cwd = entry.cwd;
       if (entry.type === 'summary' && typeof entry.summary === 'string' && !title) {
         title = entry.summary.trim();
         continue;
@@ -330,12 +366,63 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
       });
     }
 
+    const convId = req.params.convId;
+    const derivedTitle = title || fallbackTitle || null;
+    const override = getOverride(convId) || {};
+
     res.json({
-      id: req.params.convId,
-      title: title || fallbackTitle || null,
+      id: convId,
+      title: override.title || derivedTitle,
+      derivedTitle,
+      customTitle: override.title || null,
+      note: override.note || '',
       messageCount: messages.length,
       messages,
+      meta: {
+        id: convId,
+        file,
+        fileSize: st.size,
+        cwd: cwd || null,
+        gitBranch: gitBranch || null,
+        version: version || null,
+        firstTimestamp,
+        lastTimestamp,
+        messageCount: messages.length,
+      },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update editable metadata (custom title, note). Stored in the sidecar file,
+// never written back to the original transcript.
+app.patch('/api/projects/:projectId/conversations/:convId', async (req, res) => {
+  try {
+    const file = safeConversationFile(req.params.projectId, req.params.convId);
+    const st = await fsp.stat(file).catch(() => null);
+    if (!st) return res.status(404).json({ error: 'conversation not found' });
+
+    const convId = req.params.convId;
+    const body = req.body || {};
+    const cur = { ...(overrides[convId] || {}) };
+
+    if ('title' in body) {
+      const t = typeof body.title === 'string' ? body.title.trim() : '';
+      if (t) cur.title = t.slice(0, 300);
+      else delete cur.title;
+    }
+    if ('note' in body) {
+      const n = typeof body.note === 'string' ? body.note.trim() : '';
+      if (n) cur.note = n.slice(0, 4000);
+      else delete cur.note;
+    }
+
+    if (Object.keys(cur).length) overrides[convId] = cur;
+    else delete overrides[convId];
+    await saveOverrides();
+
+    res.json({ ok: true, customTitle: cur.title || null, note: cur.note || '' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -454,7 +541,7 @@ app.get('/api/projects/:projectId/search', async (req, res) => {
     for (const { f: file, lines } of entries) {
       if (results.length >= MAX_RESULTS) break;
       const convId = path.basename(file, '.jsonl');
-      const convTitle = (await getTitle(file)) || convId.slice(0, 8);
+      const convTitle = effectiveTitle(convId, await getTitle(file)) || convId.slice(0, 8);
       let perConv = 0;
 
       for (const raw of lines) {

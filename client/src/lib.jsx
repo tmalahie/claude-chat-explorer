@@ -1,7 +1,20 @@
-export async function api(url) {
-  const res = await fetch(url);
+export async function api(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
+}
+
+export function fmtBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(1)} ${units[i]}`;
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

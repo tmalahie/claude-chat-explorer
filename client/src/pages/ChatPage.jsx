@@ -131,7 +131,17 @@ export default function ChatPage() {
       {/* Conversation pane */}
       <main className="flex min-w-0 flex-1 flex-col">
         {convId ? (
-          <Conversation projectId={projectId} convId={convId} targetMessage={targetMessage} highlight={query.trim()} />
+          <Conversation
+            projectId={projectId}
+            convId={convId}
+            targetMessage={targetMessage}
+            highlight={query.trim()}
+            onMetaUpdated={(id, newTitle) =>
+              setConversations((cs) =>
+                cs ? cs.map((c) => (c.id === id ? { ...c, title: newTitle } : c)) : cs
+              )
+            }
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center">
             <div className="rounded-full bg-side px-5 py-2 text-sm text-muted">

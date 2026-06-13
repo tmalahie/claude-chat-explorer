@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, fmtBubbleTime, fmtDayDivider } from '../lib.jsx';
 import MessageBubble from './MessageBubble.jsx';
+import MetaModal from './MetaModal.jsx';
 
-export default function Conversation({ projectId, convId, targetMessage }) {
+export default function Conversation({ projectId, convId, targetMessage, onMetaUpdated }) {
   const [conv, setConv] = useState(null);
   const [error, setError] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const [showMeta, setShowMeta] = useState(false);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -35,34 +36,47 @@ export default function Conversation({ projectId, convId, targetMessage }) {
     container.scrollTop = container.scrollHeight;
   }, [conv, targetMessage]);
 
-  const copyId = () => {
-    navigator.clipboard?.writeText(convId).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+  const handleSaved = (patch) => {
+    setConv((c) => (c ? { ...c, ...patch } : c));
+    onMetaUpdated?.(convId, patch.title);
   };
 
   return (
     <>
-      {/* Header bar: title + id */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-line bg-side px-5 py-2.5">
+      {/* Header bar: title + id — click to open details */}
+      <header
+        onClick={() => conv && setShowMeta(true)}
+        title="View / edit conversation details"
+        className={`flex shrink-0 items-center gap-3 border-b border-line bg-side px-5 py-2.5 ${
+          conv ? 'cursor-pointer hover:bg-side-hover' : ''
+        }`}
+      >
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-medium">
-            {conv ? conv.title || 'Untitled conversation' : 'Loading…'}
+            {conv ? (
+              <>
+                {conv.title || <span className="text-muted italic">Untitled conversation</span>}
+                <span className="ml-2 text-xs font-normal text-muted">✎</span>
+              </>
+            ) : (
+              'Loading…'
+            )}
           </h2>
-          <button
-            onClick={copyId}
-            title="Click to copy conversation id"
-            className="flex max-w-full items-center gap-1.5 font-mono text-xs text-muted transition-colors hover:text-accent"
-          >
+          <div className="flex max-w-full items-center gap-1.5 font-mono text-xs text-muted">
             <span className="truncate">{convId}</span>
-            <span>{copied ? '✓ copied' : '⧉'}</span>
-          </button>
+          </div>
         </div>
-        {conv && (
-          <div className="shrink-0 text-xs text-muted">{conv.messageCount} messages</div>
-        )}
+        {conv && <div className="shrink-0 text-xs text-muted">{conv.messageCount} messages</div>}
       </header>
+
+      {showMeta && conv && (
+        <MetaModal
+          projectId={projectId}
+          conv={conv}
+          onClose={() => setShowMeta(false)}
+          onSaved={handleSaved}
+        />
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 md:px-8 lg:px-16">

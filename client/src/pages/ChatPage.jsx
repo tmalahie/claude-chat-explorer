@@ -136,11 +136,6 @@ export default function ChatPage() {
             convId={convId}
             targetMessage={targetMessage}
             highlight={query.trim()}
-            onMetaUpdated={(id, newTitle) =>
-              setConversations((cs) =>
-                cs ? cs.map((c) => (c.id === id ? { ...c, title: newTitle } : c)) : cs
-              )
-            }
           />
         ) : (
           <div className="flex flex-1 items-center justify-center">

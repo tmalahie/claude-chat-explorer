@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, fmtBubbleTime, fmtDayDivider } from '../lib.jsx';
+import { api, fmtBubbleTime, fmtDayDivider, openInVscode } from '../lib.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import MetaModal from './MetaModal.jsx';
 
-export default function Conversation({ projectId, convId, targetMessage, onMetaUpdated }) {
+export default function Conversation({ projectId, convId, targetMessage }) {
   const [conv, setConv] = useState(null);
   const [error, setError] = useState(null);
   const [showMeta, setShowMeta] = useState(false);
@@ -36,17 +36,12 @@ export default function Conversation({ projectId, convId, targetMessage, onMetaU
     container.scrollTop = container.scrollHeight;
   }, [conv, targetMessage]);
 
-  const handleSaved = (patch) => {
-    setConv((c) => (c ? { ...c, ...patch } : c));
-    onMetaUpdated?.(convId, patch.title);
-  };
-
   return (
     <>
       {/* Header bar: title + id — click to open details */}
       <header
         onClick={() => conv && setShowMeta(true)}
-        title="View / edit conversation details"
+        title="View conversation details"
         className={`flex shrink-0 items-center gap-3 border-b border-line bg-side px-5 py-2.5 ${
           conv ? 'cursor-pointer hover:bg-side-hover' : ''
         }`}
@@ -56,7 +51,7 @@ export default function Conversation({ projectId, convId, targetMessage, onMetaU
             {conv ? (
               <>
                 {conv.title || <span className="text-muted italic">Untitled conversation</span>}
-                <span className="ml-2 text-xs font-normal text-muted">✎</span>
+                <span className="ml-2 text-xs font-normal text-muted">ⓘ</span>
               </>
             ) : (
               'Loading…'
@@ -66,7 +61,18 @@ export default function Conversation({ projectId, convId, targetMessage, onMetaU
             <span className="truncate">{convId}</span>
           </div>
         </div>
-        {conv && <div className="shrink-0 text-xs text-muted">{conv.messageCount} messages</div>}
+        {conv && (
+          <div className="flex shrink-0 items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <span className="text-xs text-muted">{conv.messageCount} messages</span>
+            <button
+              onClick={() => openInVscode(convId, conv.cwd)}
+              title="Open this conversation in the Claude Code VSCode extension (focuses the project window first, then resumes)"
+              className="flex items-center gap-1.5 rounded-lg bg-side-active px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-110"
+            >
+              Open in VSCode <span className="text-sm leading-none">↗</span>
+            </button>
+          </div>
+        )}
       </header>
 
       {showMeta && conv && (
@@ -74,7 +80,7 @@ export default function Conversation({ projectId, convId, targetMessage, onMetaU
           projectId={projectId}
           conv={conv}
           onClose={() => setShowMeta(false)}
-          onSaved={handleSaved}
+          onSaved={(patch) => setConv((c) => (c ? { ...c, ...patch } : c))}
         />
       )}
 

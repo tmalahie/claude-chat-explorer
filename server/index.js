@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,27 +13,9 @@ const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 const PORT = process.env.PORT || 9876;
 
-// Sidecar store for user edits (custom titles, notes). We never modify the
-// original Claude transcript files — overrides are overlaid at read time,
-// keyed by conversation id (a globally-unique uuid).
-const DATA_DIR = path.join(__dirname, 'data');
-const OVERRIDES_FILE = path.join(DATA_DIR, 'overrides.json');
-let overrides = {};
-try {
-  overrides = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf8'));
-} catch {
-  overrides = {};
-}
-async function saveOverrides() {
-  await fsp.mkdir(DATA_DIR, { recursive: true });
-  await fsp.writeFile(OVERRIDES_FILE, JSON.stringify(overrides, null, 2));
-}
-function getOverride(convId) {
-  return overrides[convId] || null;
-}
-function effectiveTitle(convId, derived) {
-  return getOverride(convId)?.title || derived || null;
-}
+// Marker type for a folder override we append to a transcript. Unknown types are
+// ignored by Claude's reader and by our message rendering; we only read its `cwd`.
+const CWD_ENTRY_TYPE = 'x-chat-explorer-cwd';
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -297,7 +280,7 @@ app.get('/api/projects/:projectId/conversations', async (req, res) => {
         const id = name.replace(/\.jsonl$/, '');
         return {
           id,
-          title: effectiveTitle(id, title),
+          title: title || null,
           preview: tail.preview || null,
           lastActivity: tail.ts || new Date(stat.mtimeMs).toISOString(),
         };
@@ -327,7 +310,7 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
     let lastTimestamp = null;
     let gitBranch = null;
     let version = null;
-    let cwd = null;
+    let detectedCwd = null; // project folder recorded in the transcript
 
     const stream = fs.createReadStream(file, { encoding: 'utf8' });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -340,7 +323,18 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
       }
       if (entry.gitBranch) gitBranch = entry.gitBranch;
       if (entry.version) version = entry.version;
-      if (entry.cwd) cwd = entry.cwd;
+      if (entry.cwd) detectedCwd = entry.cwd;
+      if (entry.type === CWD_ENTRY_TYPE || entry.appEvent === 'cwd-switch') {
+        // A folder switch we recorded — show it inline as an event notice
+        // (the real entry is a user/system-reminder turn so Claude reads it).
+        messages.push({
+          uuid: entry.uuid || null,
+          role: 'event',
+          timestamp: entry.timestamp || null,
+          blocks: [{ type: 'event', text: `Switched project folder to ${entry.cwd}` }],
+        });
+        continue;
+      }
       if (entry.type === 'summary' && typeof entry.summary === 'string' && !title) {
         title = entry.summary.trim();
         continue;
@@ -367,22 +361,18 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
     }
 
     const convId = req.params.convId;
-    const derivedTitle = title || fallbackTitle || null;
-    const override = getOverride(convId) || {};
 
     res.json({
       id: convId,
-      title: override.title || derivedTitle,
-      derivedTitle,
-      customTitle: override.title || null,
-      note: override.note || '',
+      title: title || fallbackTitle || null,
+      cwd: detectedCwd || null, // latest cwd in the transcript — used by "Open in VSCode"
       messageCount: messages.length,
       messages,
       meta: {
         id: convId,
         file,
         fileSize: st.size,
-        cwd: cwd || null,
+        cwd: detectedCwd || null,
         gitBranch: gitBranch || null,
         version: version || null,
         firstTimestamp,
@@ -395,34 +385,108 @@ app.get('/api/projects/:projectId/conversations/:convId', async (req, res) => {
   }
 });
 
-// Update editable metadata (custom title, note). Stored in the sidecar file,
-// never written back to the original transcript.
-app.patch('/api/projects/:projectId/conversations/:convId', async (req, res) => {
+// Set the conversation's project folder by appending a cwd entry to the
+// transcript itself (single source of truth — no sidecar). Our reader picks up
+// the latest cwd in the file. NOTE: this writes into Claude's own .jsonl.
+app.post('/api/projects/:projectId/conversations/:convId/cwd', async (req, res) => {
   try {
     const file = safeConversationFile(req.params.projectId, req.params.convId);
     const st = await fsp.stat(file).catch(() => null);
     if (!st) return res.status(404).json({ error: 'conversation not found' });
 
-    const convId = req.params.convId;
-    const body = req.body || {};
-    const cur = { ...(overrides[convId] || {}) };
-
-    if ('title' in body) {
-      const t = typeof body.title === 'string' ? body.title.trim() : '';
-      if (t) cur.title = t.slice(0, 300);
-      else delete cur.title;
-    }
-    if ('note' in body) {
-      const n = typeof body.note === 'string' ? body.note.trim() : '';
-      if (n) cur.note = n.slice(0, 4000);
-      else delete cur.note;
+    const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd.trim() : '';
+    if (!cwd) return res.status(400).json({ error: 'A folder path is required.' });
+    const dirStat = await fsp.stat(cwd).catch(() => null);
+    if (!dirStat || !dirStat.isDirectory()) {
+      return res.status(400).json({ error: `Not a folder on disk: ${cwd}` });
     }
 
-    if (Object.keys(cur).length) overrides[convId] = cur;
-    else delete overrides[convId];
-    await saveOverrides();
+    // Read the tail once: find the last entry's uuid (to link parentUuid) and
+    // whether the file ends with a newline (so we don't glue onto a line).
+    const CHUNK = Math.min(256 * 1024, st.size);
+    let parentUuid = null;
+    let endsWithNewline = true;
+    if (CHUNK > 0) {
+      const fd = await fsp.open(file, 'r');
+      try {
+        const buf = Buffer.alloc(CHUNK);
+        await fd.read(buf, 0, CHUNK, st.size - CHUNK);
+        const data = buf.toString('utf8');
+        endsWithNewline = data.endsWith('\n');
+        let lines = data.split('\n');
+        if (st.size > CHUNK) lines = lines.slice(1); // drop partial first line
+        for (let i = lines.length - 1; i >= 0 && !parentUuid; i--) {
+          const e = parseLine(lines[i]);
+          if (e && typeof e.uuid === 'string') parentUuid = e.uuid;
+        }
+      } finally {
+        await fd.close();
+      }
+    }
 
-    res.json({ ok: true, customTitle: cur.title || null, note: cur.note || '' });
+    const dir = cwd.slice(0, 1000);
+    // A real user-role entry whose text is a system-reminder, so Claude reads it
+    // on resume. `appEvent`/`cwd` are our own markers (Claude ignores unknown
+    // fields); our app renders this inline as a folder-switch notice.
+    const entry = {
+      parentUuid,
+      isSidechain: false,
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `<system-reminder>Conversation working directory switched to ${dir}. Treat this as the active cwd from here on.</system-reminder>`,
+          },
+        ],
+      },
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      userType: 'external',
+      cwd: dir,
+      appEvent: 'cwd-switch',
+    };
+    await fsp.appendFile(file, (endsWithNewline ? '' : '\n') + JSON.stringify(entry) + '\n');
+
+    res.json({ ok: true, cwd: dir });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Directory autocomplete for the editable "project folder" field. Given a
+// partial absolute path, returns matching sub-directories (newest config-style
+// path completion). Read-only listing, directories only.
+app.get('/api/fs/complete', async (req, res) => {
+  try {
+    let input = String(req.query.path || '');
+    if (input.startsWith('~')) input = path.join(os.homedir(), input.slice(1));
+
+    let baseDir;
+    let prefix;
+    if (input === '') {
+      baseDir = os.homedir();
+      prefix = '';
+    } else if (input.endsWith('/')) {
+      baseDir = input;
+      prefix = '';
+    } else {
+      baseDir = path.dirname(input);
+      prefix = path.basename(input).toLowerCase();
+    }
+
+    const dirents = await fsp.readdir(baseDir, { withFileTypes: true }).catch(() => []);
+    const entries = [];
+    for (const d of dirents) {
+      if (!d.isDirectory() && !d.isSymbolicLink()) continue;
+      if (d.name.startsWith('.')) continue; // skip dotfiles (.git, etc.)
+      if (prefix && !d.name.toLowerCase().startsWith(prefix)) continue;
+      entries.push(path.join(baseDir, d.name));
+      if (entries.length >= 100) break;
+    }
+    entries.sort();
+    res.json({ entries });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -541,7 +605,7 @@ app.get('/api/projects/:projectId/search', async (req, res) => {
     for (const { f: file, lines } of entries) {
       if (results.length >= MAX_RESULTS) break;
       const convId = path.basename(file, '.jsonl');
-      const convTitle = effectiveTitle(convId, await getTitle(file)) || convId.slice(0, 8);
+      const convTitle = (await getTitle(file)) || convId.slice(0, 8);
       let perConv = 0;
 
       for (const raw of lines) {

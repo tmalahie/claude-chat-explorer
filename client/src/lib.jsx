@@ -1,7 +1,44 @@
 export async function api(url, options) {
   const res = await fetch(url, options);
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let msg = `API error ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
   return res.json();
+}
+
+// Deeplink that the Claude Code VSCode extension handles (registerUriHandler
+// '/open' case → resumes the session). Works as a normal browser link.
+export function vscodeDeeplink(sessionId) {
+  return `vscode://anthropic.claude-code/open?session=${encodeURIComponent(sessionId)}`;
+}
+
+function triggerUri(uri) {
+  // Fire a custom-protocol URL without navigating the app away.
+  const iframe = document.createElement('iframe');
+  iframe.style.display = 'none';
+  iframe.src = uri;
+  document.body.appendChild(iframe);
+  setTimeout(() => iframe.remove(), 1500);
+}
+
+// The extension resumes a session using the focused window's workspace folder,
+// so we must focus that project's window FIRST (vscode://file/<cwd>) and only
+// then fire the resume deeplink — otherwise the session id isn't found in the
+// active window's project and you get an empty conversation.
+export function openInVscode(sessionId, cwd) {
+  if (cwd) {
+    triggerUri(`vscode://file${cwd.startsWith('/') ? '' : '/'}${cwd}`);
+    setTimeout(() => triggerUri(vscodeDeeplink(sessionId)), 1600);
+  } else {
+    triggerUri(vscodeDeeplink(sessionId));
+  }
 }
 
 export function fmtBytes(n) {

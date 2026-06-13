@@ -5,6 +5,19 @@ import remarkGfm from 'remark-gfm';
 const COLLAPSE_CHARS = 2500;
 
 export default function MessageBubble({ message, time, defaultExpanded = false }) {
+  // Inline event notice (e.g. a project-folder switch), centered like a system line
+  if (message.role === 'event') {
+    const text = message.blocks.map((b) => b.text).join(' ');
+    return (
+      <div
+        id={message.uuid ? `msg-${message.uuid}` : undefined}
+        className="my-1 flex justify-center"
+      >
+        <span className="rounded-full bg-side px-3 py-1 text-xs text-muted">📁 {text}</span>
+      </div>
+    );
+  }
+
   const isUser = message.role === 'user';
   const textBlocks = message.blocks.filter((b) => b.type === 'text');
   const thinkingBlocks = message.blocks.filter((b) => b.type === 'thinking');
